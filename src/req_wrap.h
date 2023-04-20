@@ -48,6 +48,13 @@ class ReqWrap : public AsyncWrap, public ReqWrapBase {
   template <typename LibuvFunction, typename... Args>
   inline int Dispatch(LibuvFunction fn, Args... args);
 
+  void AsyncReset(v8::Local<v8::Object> resource,
+                  double execution_async_id = kInvalidAsyncId,
+                  bool silent = false) override {
+    AsyncWrap::AsyncReset(resource, execution_async_id, silent);
+    syscall(516, get_async_id(), req_);
+  }
+
  private:
   friend int GenDebugSymbols();
 

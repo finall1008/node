@@ -121,6 +121,7 @@ list(APPEND uv_cflags $<$<BOOL:${UV_F_STRICT_ALIASING}>:-fno-strict-aliasing>)
 
 set(uv_sources
     src/fs-poll.c
+    src/hook.c
     src/idna.c
     src/inet.c
     src/random.c

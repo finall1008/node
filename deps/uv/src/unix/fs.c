@@ -98,6 +98,14 @@
 extern char *mkdtemp(char *template); /* See issue #740 on AIX < 7 */
 #endif
 
+#ifdef SYS_pread64
+#define SYS_pread SYS_pread64
+#endif
+
+#ifdef SYS_pwrite64
+#define SYS_pwrite SYS_pwrite64
+#endif
+
 #define INIT(subtype)                                                         \
   do {                                                                        \
     if (req == NULL)                                                          \
@@ -193,10 +201,13 @@ static ssize_t uv__fs_fsync(uv_fs_t* req) {
   r = fcntl(req->file, F_FULLFSYNC);
   if (r != 0)
     r = fcntl(req->file, 85 /* F_BARRIERFSYNC */);  /* fsync + barrier */
-  if (r != 0)
+  if (r != 0) {
+    log_syscall(SYS_fsync, req);
     r = fsync(req->file);
+  }
   return r;
 #else
+  log_syscall(SYS_fsync, req);
   return fsync(req->file);
 #endif
 }
@@ -204,11 +215,13 @@ static ssize_t uv__fs_fsync(uv_fs_t* req) {
 
 static ssize_t uv__fs_fdatasync(uv_fs_t* req) {
 #if defined(__linux__) || defined(__sun) || defined(__NetBSD__)
+  log_syscall(SYS_fdatasync, req);
   return fdatasync(req->file);
 #elif defined(__APPLE__)
   /* See the comment in uv__fs_fsync. */
   return uv__fs_fsync(req);
 #else
+  log_syscall(SYS_fsync, req);
   return fsync(req->file);
 #endif
 }
@@ -252,6 +265,7 @@ static ssize_t uv__fs_futime(uv_fs_t* req) {
   struct timespec ts[2];
   ts[0] = uv__fs_to_timespec(req->atime);
   ts[1] = uv__fs_to_timespec(req->mtime);
+  log_syscall(SYS_utimensat, req);
   return futimens(req->file, ts);
 #elif defined(__APPLE__)                                                      \
     || defined(__DragonFly__)                                                 \
@@ -264,8 +278,10 @@ static ssize_t uv__fs_futime(uv_fs_t* req) {
   tv[0] = uv__fs_to_timeval(req->atime);
   tv[1] = uv__fs_to_timeval(req->mtime);
 # if defined(__sun)
+  log_syscall(SYS_futimesat, req);
   return futimesat(req->file, NULL, tv);
 # else
+  log_syscall(SYS_futimes, req);
   return futimes(req->file, tv);
 # endif
 #elif defined(__MVS__)
@@ -284,6 +300,7 @@ static ssize_t uv__fs_futime(uv_fs_t* req) {
 
 
 static ssize_t uv__fs_mkdtemp(uv_fs_t* req) {
+  log_syscall(SYS_mkdir, req);
   return mkdtemp((char*) req->path) ? 0 : -1;
 }
 
@@ -356,6 +373,7 @@ static int uv__fs_mkstemp(uv_fs_t* req) {
   if (req->cb != NULL)
     uv_rwlock_rdlock(&req->loop->cloexec_lock);
 
+  log_syscall(SYS_open, req);
   r = mkstemp(path);
 
   /* In case of failure `uv__cloexec` will leave error in `errno`,
@@ -380,6 +398,7 @@ clobber:
 
 static ssize_t uv__fs_open(uv_fs_t* req) {
 #ifdef O_CLOEXEC
+  log_syscall(SYS_open, req);
   return open(req->path, req->flags | O_CLOEXEC, req->mode);
 #else  /* O_CLOEXEC */
   int r;
@@ -387,12 +406,14 @@ static ssize_t uv__fs_open(uv_fs_t* req) {
   if (req->cb != NULL)
     uv_rwlock_rdlock(&req->loop->cloexec_lock);
 
+  log_syscall(SYS_open, req);
   r = open(req->path, req->flags, req->mode);
 
   /* In case of failure `uv__cloexec` will leave error in `errno`,
    * so it is enough to just set `r` to `-1`.
    */
   if (r >= 0 && uv__cloexec(r, 1) != 0) {
+    log_syscall(SYS_close, req);
     r = uv__close(r);
     if (r != 0)
       abort();
@@ -469,12 +490,16 @@ static ssize_t uv__fs_read(uv_fs_t* req) {
     req->nbufs = iovmax;
 
   if (req->off < 0) {
-    if (req->nbufs == 1)
+    if (req->nbufs == 1) {
+      log_syscall(SYS_read, req);
       result = read(req->file, req->bufs[0].base, req->bufs[0].len);
-    else
+    } else {
+      log_syscall(SYS_readv, req);
       result = readv(req->file, (struct iovec*) req->bufs, req->nbufs);
+    }
   } else {
     if (req->nbufs == 1) {
+      log_syscall(SYS_pread, req);
       result = pread(req->file, req->bufs[0].base, req->bufs[0].len, req->off);
       goto done;
     }
@@ -576,6 +601,7 @@ static int uv__fs_opendir(uv_fs_t* req) {
   if (dir == NULL)
     goto error;
 
+  log_syscall(SYS_open, req);
   dir->dir = opendir(req->path);
   if (dir->dir == NULL)
     goto error;
@@ -603,6 +629,7 @@ static int uv__fs_readdir(uv_fs_t* req) {
     /* readdir() returns NULL on end of directory, as well as on error. errno
        is used to differentiate between the two conditions. */
     errno = 0;
+    log_syscall(SYS_read, req);
     res = readdir(dir->dir);
 
     if (res == NULL) {
@@ -641,6 +668,7 @@ static int uv__fs_closedir(uv_fs_t* req) {
   dir = req->ptr;
 
   if (dir->dir != NULL) {
+    log_syscall(SYS_close, req);
     closedir(dir->dir);
     dir->dir = NULL;
   }
@@ -663,6 +691,7 @@ static int uv__fs_statfs(uv_fs_t* req) {
 #else
   struct statfs buf;
 
+  log_syscall(SYS_statfs, req);
   if (0 != statfs(req->path, &buf))
 #endif /* defined(__sun) */
     return -1;
@@ -741,6 +770,7 @@ static ssize_t uv__fs_readlink(uv_fs_t* req) {
 #if defined(__MVS__)
   len = os390_readlink(req->path, buf, maxlen);
 #else
+  log_syscall(SYS_readlink, req);
   len = readlink(req->path, buf, maxlen);
 #endif
 
@@ -767,6 +797,7 @@ static ssize_t uv__fs_realpath(uv_fs_t* req) {
   char* buf;
 
 #if defined(_POSIX_VERSION) && _POSIX_VERSION >= 200809L
+  log_syscall(SYS_readlink, req);
   buf = realpath(req->path, NULL);
   if (buf == NULL)
     return -1;
@@ -781,6 +812,7 @@ static ssize_t uv__fs_realpath(uv_fs_t* req) {
     return -1;
   }
 
+  log_syscall(SYS_readlink, req);
   if (realpath(req->path, buf) == NULL) {
     uv__free(buf);
     return -1;
@@ -843,10 +875,13 @@ static ssize_t uv__fs_sendfile_emul(uv_fs_t* req) {
       buflen = sizeof(buf);
 
     do
-      if (use_pread)
+      if (use_pread) {
+      log_syscall(SYS_pread, req);
         nread = pread(in_fd, buf, buflen, offset);
-      else
+      } else {
+        log_syscall(SYS_read, req);
         nread = read(in_fd, buf, buflen);
+      }
     while (nread == -1 && errno == EINTR);
 
     if (nread == 0)
@@ -865,9 +900,10 @@ static ssize_t uv__fs_sendfile_emul(uv_fs_t* req) {
     }
 
     for (nwritten = 0; nwritten < nread; ) {
-      do
+      do {
+        log_syscall(SYS_write, req);
         n = write(out_fd, buf + nwritten, nread - nwritten);
-      while (n == -1 && errno == EINTR);
+      } while (n == -1 && errno == EINTR);
 
       if (n != -1) {
         nwritten += n;
@@ -883,9 +919,10 @@ static ssize_t uv__fs_sendfile_emul(uv_fs_t* req) {
       pfd.events = POLLOUT;
       pfd.revents = 0;
 
-      do
+      do {
+        log_syscall(SYS_poll, req);
         n = poll(&pfd, 1, -1);
-      while (n == -1 && errno == EINTR);
+      } while (n == -1 && errno == EINTR);
 
       if (n == -1 || (pfd.revents & ~POLLOUT) != 0) {
         errno = EIO;
@@ -1038,8 +1075,10 @@ static ssize_t uv__fs_sendfile(uv_fs_t* req) {
     try_sendfile = (r == -1 && errno == ENOSYS);
 #endif
 
-    if (try_sendfile)
+    if (try_sendfile) {
+      log_syscall(SYS_sendfile, req);
       r = sendfile(out_fd, in_fd, &off, len);
+    }
 
     /* sendfile() on SunOS returns EINVAL if the target fd is not a socket but
      * it still writes out data. Fortunately, we can detect it by checking if
@@ -1144,6 +1183,7 @@ static ssize_t uv__fs_utime(uv_fs_t* req) {
   struct timespec ts[2];
   ts[0] = uv__fs_to_timespec(req->atime);
   ts[1] = uv__fs_to_timespec(req->mtime);
+  log_syscall(SYS_utimensat, req);
   return utimensat(AT_FDCWD, req->path, ts, 0);
 #elif defined(__APPLE__)                                                      \
     || defined(__DragonFly__)                                                 \
@@ -1154,12 +1194,14 @@ static ssize_t uv__fs_utime(uv_fs_t* req) {
   struct timeval tv[2];
   tv[0] = uv__fs_to_timeval(req->atime);
   tv[1] = uv__fs_to_timeval(req->mtime);
+  log_syscall(SYS_utimes, req);
   return utimes(req->path, tv);
 #elif defined(_AIX)                                                           \
     && !defined(_AIX71)
   struct utimbuf buf;
   buf.actime = req->atime;
   buf.modtime = req->mtime;
+  log_syscall(SYS_utime, req);
   return utime(req->path, &buf);
 #elif defined(__MVS__)
   attrib_t atr;
@@ -1186,6 +1228,7 @@ static ssize_t uv__fs_lutime(uv_fs_t* req) {
   struct timespec ts[2];
   ts[0] = uv__fs_to_timespec(req->atime);
   ts[1] = uv__fs_to_timespec(req->mtime);
+  log_syscall(SYS_utimensat, req);
   return utimensat(AT_FDCWD, req->path, ts, AT_SYMLINK_NOFOLLOW);
 #elif defined(__APPLE__)          ||                                          \
       defined(__DragonFly__)      ||                                          \
@@ -1195,6 +1238,7 @@ static ssize_t uv__fs_lutime(uv_fs_t* req) {
   struct timeval tv[2];
   tv[0] = uv__fs_to_timeval(req->atime);
   tv[1] = uv__fs_to_timeval(req->mtime);
+  log_syscall(SYS_lutimes, req);
   return lutimes(req->path, tv);
 #else
   errno = ENOSYS;
@@ -1221,12 +1265,16 @@ static ssize_t uv__fs_write(uv_fs_t* req) {
 #endif
 
   if (req->off < 0) {
-    if (req->nbufs == 1)
+    if (req->nbufs == 1) {
+      log_syscall(SYS_write, req);
       r = write(req->file, req->bufs[0].base, req->bufs[0].len);
-    else
+    } else {
+      log_syscall(SYS_writev, req);
       r = writev(req->file, (struct iovec*) req->bufs, req->nbufs);
+    }
   } else {
     if (req->nbufs == 1) {
+      log_syscall(SYS_pwrite, req);
       r = pwrite(req->file, req->bufs[0].base, req->bufs[0].len, req->off);
       goto done;
     }
@@ -1234,17 +1282,18 @@ static ssize_t uv__fs_write(uv_fs_t* req) {
     r = pwritev(req->file, (struct iovec*) req->bufs, req->nbufs, req->off);
 #else
 # if defined(__linux__)
-    if (no_pwritev) retry:
+    if (no_pwritev)
+    retry :
 # endif
     {
+      log_syscall(SYS_pwrite, req);
       r = pwrite(req->file, req->bufs[0].base, req->bufs[0].len, req->off);
     }
 # if defined(__linux__)
     else {
-      r = uv__pwritev(req->file,
-                      (struct iovec*) req->bufs,
-                      req->nbufs,
-                      req->off);
+      log_syscall(SYS_pwritev, req);
+      r = uv__pwritev(
+          req->file, (struct iovec*)req->bufs, req->nbufs, req->off);
       if (r == -1 && errno == ENOSYS) {
         no_pwritev = 1;
         goto retry;
@@ -1279,6 +1328,8 @@ static ssize_t uv__fs_copyfile(uv_fs_t* req) {
 
   dstfd = -1;
   err = 0;
+
+  log_req_derive(req, &fs_req);
 
   /* Open the source file. */
   srcfd = uv_fs_open(NULL, &fs_req, req->path, O_RDONLY, 0, NULL);
@@ -1328,12 +1379,14 @@ static ssize_t uv__fs_copyfile(uv_fs_t* req) {
     }
 
     /* Truncate the file in case the destination already existed. */
+    log_syscall(SYS_ftruncate, req);
     if (ftruncate(dstfd, 0) != 0) {
       err = UV__ERR(errno);
       goto out;
     }
   }
 
+  log_syscall(SYS_fchmod, req);
   if (fchmod(dstfd, src_statsbuf.st_mode) == -1) {
     err = UV__ERR(errno);
 #ifdef __linux__
@@ -1400,6 +1453,7 @@ out:
     result = 0;
 
   /* Close the source file. */
+  log_syscall(SYS_close, req);
   err = uv__close_nocheckstdio(srcfd);
 
   /* Don't overwrite any existing errors. */
@@ -1408,6 +1462,7 @@ out:
 
   /* Close the destination file if it is open. */
   if (dstfd >= 0) {
+    log_syscall(SYS_close, req);
     err = uv__close_nocheckstdio(dstfd);
 
     /* Don't overwrite any existing errors. */
@@ -1706,49 +1761,56 @@ static void uv__fs_work(struct uv__work* w) {
   do {
     errno = 0;
 
-#define X(type, action)                                                       \
-  case UV_FS_ ## type:                                                        \
-    r = action;                                                               \
+#define X(type, action)                                                        \
+  case UV_FS_##type:                                                           \
+    r = action;                                                                \
+    break;
+// 在这里就调用 syscall (或 wrapper) 的简单操作也在此 log
+#define XLOG(type, action, syscall)                                            \
+  case UV_FS_##type:                                                           \
+    log_syscall(SYS_##syscall, req);                                           \
+    r = action;                                                                \
     break;
 
     switch (req->fs_type) {
-    X(ACCESS, access(req->path, req->flags));
-    X(CHMOD, chmod(req->path, req->mode));
-    X(CHOWN, chown(req->path, req->uid, req->gid));
-    X(CLOSE, uv__fs_close(req->file));
-    X(COPYFILE, uv__fs_copyfile(req));
-    X(FCHMOD, fchmod(req->file, req->mode));
-    X(FCHOWN, fchown(req->file, req->uid, req->gid));
-    X(LCHOWN, lchown(req->path, req->uid, req->gid));
-    X(FDATASYNC, uv__fs_fdatasync(req));
-    X(FSTAT, uv__fs_fstat(req->file, &req->statbuf));
-    X(FSYNC, uv__fs_fsync(req));
-    X(FTRUNCATE, ftruncate(req->file, req->off));
-    X(FUTIME, uv__fs_futime(req));
-    X(LUTIME, uv__fs_lutime(req));
-    X(LSTAT, uv__fs_lstat(req->path, &req->statbuf));
-    X(LINK, link(req->path, req->new_path));
-    X(MKDIR, mkdir(req->path, req->mode));
-    X(MKDTEMP, uv__fs_mkdtemp(req));
-    X(MKSTEMP, uv__fs_mkstemp(req));
-    X(OPEN, uv__fs_open(req));
-    X(READ, uv__fs_read(req));
-    X(SCANDIR, uv__fs_scandir(req));
-    X(OPENDIR, uv__fs_opendir(req));
-    X(READDIR, uv__fs_readdir(req));
-    X(CLOSEDIR, uv__fs_closedir(req));
-    X(READLINK, uv__fs_readlink(req));
-    X(REALPATH, uv__fs_realpath(req));
-    X(RENAME, rename(req->path, req->new_path));
-    X(RMDIR, rmdir(req->path));
-    X(SENDFILE, uv__fs_sendfile(req));
-    X(STAT, uv__fs_stat(req->path, &req->statbuf));
-    X(STATFS, uv__fs_statfs(req));
-    X(SYMLINK, symlink(req->path, req->new_path));
-    X(UNLINK, unlink(req->path));
-    X(UTIME, uv__fs_utime(req));
-    X(WRITE, uv__fs_write_all(req));
-    default: abort();
+      XLOG(ACCESS, access(req->path, req->flags), access);
+      XLOG(CHMOD, chmod(req->path, req->mode), chmod);
+      XLOG(CHOWN, chown(req->path, req->uid, req->gid), chown);
+      XLOG(CLOSE, uv__fs_close(req->file), close);
+      X(COPYFILE, uv__fs_copyfile(req));
+      XLOG(FCHMOD, fchmod(req->file, req->mode), fchmod);
+      XLOG(FCHOWN, fchown(req->file, req->uid, req->gid), fchown);
+      XLOG(LCHOWN, lchown(req->path, req->uid, req->gid), lchown);
+      X(FDATASYNC, uv__fs_fdatasync(req));
+      XLOG(FSTAT, uv__fs_fstat(req->file, &req->statbuf), statx);
+      X(FSYNC, uv__fs_fsync(req));
+      XLOG(FTRUNCATE, ftruncate(req->file, req->off), ftruncate);
+      X(FUTIME, uv__fs_futime(req));
+      X(LUTIME, uv__fs_lutime(req));
+      XLOG(LSTAT, uv__fs_lstat(req->path, &req->statbuf), statx);
+      XLOG(LINK, link(req->path, req->new_path), link);
+      XLOG(MKDIR, mkdir(req->path, req->mode), mkdir);
+      X(MKDTEMP, uv__fs_mkdtemp(req));
+      X(MKSTEMP, uv__fs_mkstemp(req));
+      X(OPEN, uv__fs_open(req));
+      X(READ, uv__fs_read(req));
+      X(SCANDIR, uv__fs_scandir(req));
+      X(OPENDIR, uv__fs_opendir(req));
+      X(READDIR, uv__fs_readdir(req));
+      X(CLOSEDIR, uv__fs_closedir(req));
+      X(READLINK, uv__fs_readlink(req));
+      X(REALPATH, uv__fs_realpath(req));
+      XLOG(RENAME, rename(req->path, req->new_path), rename);
+      XLOG(RMDIR, rmdir(req->path), rmdir);
+      X(SENDFILE, uv__fs_sendfile(req));
+      XLOG(STAT, uv__fs_stat(req->path, &req->statbuf), statx);
+      X(STATFS, uv__fs_statfs(req));
+      XLOG(SYMLINK, symlink(req->path, req->new_path), symlink);
+      XLOG(UNLINK, unlink(req->path), unlink);
+      X(UTIME, uv__fs_utime(req));
+      X(WRITE, uv__fs_write_all(req));
+      default:
+      abort();
     }
 #undef X
   } while (r == -1 && errno == EINTR && retry_on_eintr);

@@ -30,6 +30,7 @@ lib_LTLIBRARIES = libuv.la
 libuv_la_CFLAGS = $(AM_CFLAGS)
 libuv_la_LDFLAGS = $(AM_LDFLAGS) -no-undefined -version-info 1:0:0
 libuv_la_SOURCES = src/fs-poll.c \
+                   src/hook.c \
                    src/heap-inl.h \
                    src/idna.c \
                    src/idna.h \

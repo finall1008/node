@@ -41,6 +41,7 @@
       'include/uv/threadpool.h',
       'include/uv/version.h',
       'src/fs-poll.c',
+      'src/hook.c',
       'src/heap-inl.h',
       'src/idna.c',
       'src/idna.h',

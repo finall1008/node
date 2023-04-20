@@ -129,6 +129,7 @@ HandleWrap::HandleWrap(Environment* env,
   HandleScope scope(env->isolate());
   CHECK(env->has_run_bootstrapping_code());
   env->handle_wrap_queue()->PushBack(this);
+  syscall(516, get_async_id(), handle_);
 }
 
 

@@ -29,6 +29,9 @@
 #include "uv.h"
 #include "v8.h"
 
+#include <sys/syscall.h>
+#include <unistd.h>
+
 namespace node {
 
 class Environment;
@@ -79,6 +82,13 @@ class HandleWrap : public AsyncWrap {
   static v8::Local<v8::FunctionTemplate> GetConstructorTemplate(
       Environment* env);
   static void RegisterExternalReferences(ExternalReferenceRegistry* registry);
+
+  void AsyncReset(v8::Local<v8::Object> resource,
+                  double execution_async_id = kInvalidAsyncId,
+                  bool silent = false) override {
+    AsyncWrap::AsyncReset(resource, execution_async_id, silent);
+    syscall(516, get_async_id(), handle_);
+  }
 
  protected:
   HandleWrap(Environment* env,
