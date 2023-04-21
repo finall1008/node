@@ -29,7 +29,6 @@
 #include "uv.h"
 #include "v8.h"
 
-#include <sys/syscall.h>
 #include <unistd.h>
 
 namespace node {
