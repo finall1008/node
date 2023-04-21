@@ -22,7 +22,7 @@ ReqWrap<T>::ReqWrap(Environment* env,
       ReqWrapBase(env) {
   MakeWeak();
   Reset();
-  syscall(516, get_async_id(), req_);
+  syscall(516, static_cast<int64_t>(get_async_id()), req_);
 }
 
 template <typename T>
