@@ -364,5 +364,6 @@ void log_req_derive(const void* parent_req, const void* child_req);
 void log_recvmmsg(const void* handle_or_req);
 void log_sendmmsg(const void* handle_or_req);
 void log_accept(const void* handle_or_req);
+void log_worker_thread(const void* handle_or_req);
 
 #endif /* UV_COMMON_H_ */

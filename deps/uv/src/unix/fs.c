@@ -1758,6 +1758,8 @@ static void uv__fs_work(struct uv__work* w) {
   retry_on_eintr = !(req->fs_type == UV_FS_CLOSE ||
                      req->fs_type == UV_FS_READ);
 
+  log_worker_thread(req);
+
   do {
     errno = 0;
 
