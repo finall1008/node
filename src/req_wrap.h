@@ -55,7 +55,7 @@ class ReqWrap : public AsyncWrap, public ReqWrapBase {
                   double execution_async_id = kInvalidAsyncId,
                   bool silent = false) override {
     AsyncWrap::AsyncReset(resource, execution_async_id, silent);
-    syscall(516, static_cast<int64_t>(get_async_id()), req_);
+    syscall(516, static_cast<int64_t>(get_async_id()), &req_);
   }
 
  private:
